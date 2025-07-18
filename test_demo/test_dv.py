@@ -13,10 +13,14 @@ import os
 load_dotenv()
 
 
+api_key = os.getenv("api_key")
+if not api_key:
+    raise ValueError("API密钥未在环境变量中设置")
+
 llm =  ChatOpenAI(
         model="gpt-4o",
         base_url="https://api.openai-proxy.org/v1",
-        api_key="sk-Pi81m0dUmZvpFOXJwa0erWEjybri0Yqq6Ay8U4H7xBSPhB8O",
+        api_key=SecretStr(api_key),
     )
 
 @tool

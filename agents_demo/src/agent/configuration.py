@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from typing import Annotated
+import os
+from pathlib import Path
 
 from langchain_core.runnables import ensure_config
 from langgraph.config import get_config
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
+from dotenv import load_dotenv
 
 from src.agent import prompts
+
+# 加载agents_demo目录下的.env文件
+env_path = Path(__file__).parent.parent.parent / ".env"
+load_dotenv(env_path)
 
 
 @dataclass(kw_only=True)
@@ -40,7 +47,7 @@ class Configuration:
         },
     )
     api_key: SecretStr = field(
-        default=SecretStr("sk-Pi81m0dUmZvpFOXJwa0erWEjybri0Yqq6Ay8U4H7xBSPhB8O"),  # 你自己的 key
+        default_factory=lambda: SecretStr(os.getenv("api_key", "")),
         metadata={
             "description": "The API key for the OpenAI proxy API."
         },
