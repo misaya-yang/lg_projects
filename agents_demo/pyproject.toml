@@ -17,6 +17,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
 
+[project.scripts]
+run-writer = "agent.run_writer:main"
+
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
