@@ -1,0 +1,19 @@
+[project]
+name = "novel_workflow"
+version = "0.0.1"
+requires-python = ">=3.9"
+description = "Example workflow for writing a novel with LangGraph"
+readme = "README.md"
+dependencies = [
+    "langgraph>=0.2.6",
+    "python-dotenv>=1.0.1"
+]
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["novel"]
+[tool.setuptools.package-dir]
+"novel" = "src/novel"
