@@ -1,0 +1,6 @@
+<script>
+    const evtSource = new EventSource("http://127.0.0.1:8000/chat/stream");
+    evtSource.onmessage = function(event) {
+      console.log(event.data); // 这里会一条条打印
+    };
+    </script>
