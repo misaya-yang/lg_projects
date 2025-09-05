@@ -153,12 +153,24 @@ async def _chat_stream_impl(request: MessagesRequest):
 
     def event_generator():
         for chunk in graph.stream({"messages": messages}):
-            # 只提取AI回复的content并且非空
             try:
-                ai_messages = chunk.get("smart_sentiment_agent", {}).get("messages", [])
+                node = chunk.get("smart_sentiment_agent", {})
+                # 如果有工具调用, 发送特殊标记供前端显示动画
+                actions = node.get("actions", [])
+                for action in actions:
+                    tool_name = getattr(action, "tool", None) or action.get("tool")
+                    if tool_name:
+                        yield f"data: [tool]{tool_name}\n\n"
+
+                # 只提取AI回复的content并且非空
+                ai_messages = node.get("messages", [])
                 for m in ai_messages:
-                    # 检查是否是AI消息且有内容
-                    if hasattr(m, 'type') and m.type == "ai" and hasattr(m, 'content') and m.content:
+                    if (
+                        hasattr(m, "type")
+                        and m.type == "ai"
+                        and hasattr(m, "content")
+                        and m.content
+                    ):
                         yield f"data: {m.content}\n\n"
             except Exception as e:
                 yield f"data: [error]{str(e)}\n\n"
