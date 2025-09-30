@@ -1,17 +1,16 @@
-"""Define the configurable parameters for the agent."""
+"""Define the configurable parameters for the deep research agent."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Annotated
 import os
-from pathlib import Path
 
+from dotenv import load_dotenv
 from langchain_core.runnables import ensure_config
 from langgraph.config import get_config
-from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
-from dotenv import load_dotenv
 
 from src.agent import prompts
 
@@ -22,63 +21,62 @@ load_dotenv(env_path)
 
 @dataclass(kw_only=True)
 class Configuration:
-    """The configuration for the agent."""
+    """Configuration for the deep research work graph."""
 
-    system_prompt: str = field(
-        default=prompts.SYSTEM_PROMPT,
-        metadata={
-            "description": "The system prompt to use for the agent's interactions. "
-            "This prompt sets the context and behavior for the agent."
-        },
+    research_system_prompt: str = field(
+        default=prompts.RESEARCH_SYSTEM_PROMPT,
+        metadata={"description": "High-level system instructions shared across the research workflow."},
+    )
+
+    planning_prompt: str = field(
+        default=prompts.RESEARCH_PLANNING_PROMPT,
+        metadata={"description": "Prompt template used to request a structured research plan."},
+    )
+
+    analysis_prompt: str = field(
+        default=prompts.RESEARCH_ANALYSIS_PROMPT,
+        metadata={"description": "Prompt template guiding evidence synthesis for each step."},
+    )
+
+    synthesis_prompt: str = field(
+        default=prompts.RESEARCH_SYNTHESIS_PROMPT,
+        metadata={"description": "Prompt template for generating the final markdown report."},
     )
 
     model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
-        default="gpt-4o",  # 改为你的模型名
-        metadata={
-            "description": "The name of the language model to use for the agent's main interactions. "
-            "Should be in the form: provider/model-name."
-        },
+        default="gpt-4o-mini",
+        metadata={"description": "The chat model identifier used for reasoning and writing."},
     )
 
     base_url: str = field(
         default="https://api.openai-proxy.org/v1",
-        metadata={
-            "description": "The base URL for the OpenAI proxy API."
-        },
+        metadata={"description": "Base URL for the model provider."},
     )
+
     api_key: SecretStr = field(
         default_factory=lambda: SecretStr(os.getenv("api_key", "")),
-        metadata={
-            "description": "The API key for the OpenAI proxy API."
-        },
+        metadata={"description": "API key for the configured model provider."},
     )
 
     max_search_results: int = field(
-        default=10,
-        metadata={
-            "description": "The maximum number of search results to return for each search query."
-        },
+        default=8,
+        metadata={"description": "Maximum number of Tavily search results to request per query."},
     )
 
-    search_prompt: str = field(
-        default=prompts.SEARCH_PROMPT,
-        metadata={
-            "description": "The prompt to use for the research agent's interactions. "
-            "This prompt sets the context and behavior for the research agent."
-        },
+    max_research_branches: int = field(
+        default=4,
+        metadata={"description": "Maximum number of plan steps the planner should explore."},
     )
 
-    math_prompt: str = field(
-        default=prompts.MATH_PROMPT,
-        metadata={
-            "description": "The prompt to use for the math agent's interactions. "
-            "This prompt sets the context and behavior for the math agent."
-        },
+    default_docx_directory: str = field(
+        default="artifacts/reports",
+        metadata={"description": "Default directory used when exporting markdown research to DOCX."},
     )
 
     @classmethod
     def from_context(cls) -> Configuration:
         """Create a Configuration instance from a RunnableConfig object."""
+
         try:
             config = get_config()
         except RuntimeError:

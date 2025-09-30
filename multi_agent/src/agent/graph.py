@@ -1,238 +1,149 @@
-"""Define a custom Reasoning and Action agent.
+"""Deep research work graph orchestrated with LangGraph."""
 
-Works with a chat model with tool calling support.
-"""
+from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Dict, List, Literal, cast
+from typing import Literal, TypedDict
 
-from langchain_core.messages import AIMessage
-from langgraph import graph
-from langgraph.graph import END, StateGraph,START,MessagesState
-from langgraph.types import Command
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent,ToolNode,InjectedState
-from langgraph_supervisor import create_supervisor
-from langchain_core.tools import tool, InjectedToolCallId
+from langgraph.graph import END, START, StateGraph
 
-
-
-
+from deepagent import DeepResearchAgent, Finding, PlanItem
 from src.agent.configuration import Configuration
-from src.agent.state import InputState, State
-from src.agent.tools import TOOLS
-from src.agent.tools import search
-from src.agent.tools import add,sub,mul,div
+from src.agent.tools import markdown_to_docx, search
 from src.agent.utils import load_chat_model
 
 
-#读取配置
-configuration = Configuration.from_context()
+class ResearchState(TypedDict, total=False):
+    """State container used throughout the deep research workflow."""
 
-# 定义一个网络搜索代理
-research_agent = create_react_agent(
-    model=load_chat_model(
+    query: str
+    title: str
+    plan: list[PlanItem]
+    current_step: int
+    findings: list[Finding]
+    report_markdown: str
+    docx_path: str
+    exported_at: str
+
+
+def _build_agent(configuration: Configuration) -> DeepResearchAgent:
+    api_key = (
+        configuration.api_key.get_secret_value()
+        if hasattr(configuration.api_key, 'get_secret_value')
+        else configuration.api_key
+    )
+    llm = load_chat_model(
         configuration.model,
         configuration.base_url,
-        configuration.api_key,
-    ),
-    tools=[search],
-    prompt=configuration.search_prompt,
-    name ='research_agent'
-)
-
-#定义一个数学计算代理
-math_agent = create_react_agent(
-    model=load_chat_model(
-        configuration.model,
-        configuration.base_url,
-        configuration.api_key,
-    ),
-    tools=[add,sub,mul,div],
-    prompt=configuration.math_prompt,
-    name ='math_agent'
-)
-
-# 定义一个supervisor节点，用于监控工具调用
-
-supervisor = create_supervisor(
-   model=load_chat_model(
-        configuration.model,
-        configuration.base_url,
-        configuration.api_key,
-    ),
-    agents=[research_agent,math_agent],
-    prompt=(
-        "You are a supervisor managing two agents:\n"
-        "- a research agent. Assign research-related tasks to this agent\n"
-        "- a math agent. Assign math-related tasks to this agent\n"
-        "Assign work to one agent at a time, do not call agents in parallel.\n"
-        "Do not do any work yourself."
-    ),
-    add_handoff_back_messages=True,
-    output_mode="last_message",
-)
-
-def create_handoff_tool(*, agent_name:str, description:str|None=None):
-    name = f"transfer_to_{agent_name}"
-    description = description or f"Ask {agent_name} for help"
-
-    @tool(name,description=description)
-    def handoff_tool(
-        state:Annotated[MessagesState,InjectedState],
-        tool_call_id:Annotated[str,InjectedToolCallId]
-    ) -> Command:
-        toole_message ={
-            "role":"tool",
-            "content":f"Successfully Transfer to {agent_name}",
-            "name":name,
-            "tool_call_id":tool_call_id
-        }
-        return Command(
-            goto=agent_name,
-            update={
-                **state,
-                "messages":state["messages"]+[toole_message]
-            },
-            graph=Command.PARENT
-        )
-    return handoff_tool
-
-# Handoffs
-assign_to_research_agent = create_handoff_tool(agent_name="research_agent",description="Assign a research task to the research agent")
-assign_to_math_agent = create_handoff_tool(agent_name="math_agent",description="Assign a math task to the math agent")
+        api_key,
+    )
+    return DeepResearchAgent(
+        llm=llm,
+        system_prompt=configuration.research_system_prompt,
+        planning_prompt=configuration.planning_prompt,
+        analysis_prompt=configuration.analysis_prompt,
+        synthesis_prompt=configuration.synthesis_prompt,
+    )
 
 
-
-supervisor_agent=create_react_agent(
-    model=load_chat_model(
-        configuration.model,
-        configuration.base_url,
-        configuration.api_key,
-    ),
-    tools=[assign_to_research_agent,assign_to_math_agent],
-    prompt=(
-        "You are a supervisor managing two agents:\n"
-        "- a research agent. Assign research-related tasks to this agent\n"
-        "- a math agent. Assign math-related tasks to this agent\n"
-        "Assign work to one agent at a time, do not call agents in parallel.\n"
-        "Do not do any work yourself."
-    ),
-    name="supervisor" 
-)
-
-graph=(
-    StateGraph(MessagesState)
-    .add_node(supervisor_agent,destinations=("research_agent","math_agent",END))
-    .add_node(research_agent)
-    .add_node(math_agent)
-    .add_edge(START,"supervisor")
-    .add_edge("research_agent","supervisor")
-    .add_edge("math_agent","supervisor")
-    .add_edge("supervisor",END)
-    .compile()
-)
-
-# Define the function that calls the model
-
-
-async def call_model(state: State) -> Dict[str, List[AIMessage]]:
-    """Call the LLM powering our "agent".
-
-    This function prepares the prompt, initializes the model, and processes the response.
-
-    Args:
-        state (State): The current state of the conversation.
-        config (RunnableConfig): Configuration for the model run.
-
-    Returns:
-        dict: A dictionary containing the model's response message.
-    """
+async def plan_research(state: ResearchState) -> ResearchState:
     configuration = Configuration.from_context()
-
-    # Initialize the model with tool binding. Change the model or add more tools here.
-    model = load_chat_model(
-        configuration.model,
-        configuration.base_url,
-        configuration.api_key,
-    ).bind_tools(TOOLS)
-
-    # Format the system prompt. Customize this to change the agent's behavior.
-    system_message = configuration.system_prompt.format(
-        system_time=datetime.now(tz=UTC).isoformat()
-    )
-
-    # Get the model's response
-    response = cast(
-        AIMessage,
-        await model.ainvoke(
-            [{"role": "system", "content": system_message}, *state.messages]
-        ),
-    )
-
-    # Handle the case when it's the last step and the model still wants to use a tool
-    if state.is_last_step and response.tool_calls:
-        return {
-            "messages": [
-                AIMessage(
-                    id=response.id,
-                    content="Sorry, I could not find an answer to your question in the specified number of steps.",
-                )
-            ]
-        }
-
-    # Return the model's response as a list to be added to existing messages
-    return {"messages": [response]}
-
-
-# Define a new graph
-
-builder = StateGraph(State, config_schema=Configuration)
-builder.set_entry_point("call_model")
-
-# Define the two nodes we will cycle between
-builder.add_node(call_model)
-builder.add_node("tools", ToolNode(TOOLS))
-
-# Set the entrypoint as `call_model`
-# This means that this node is the first one called
-builder.add_edge("__start__", "call_model")
-
-
-def route_model_output(state: State) -> Literal["__end__", "tools"]:
-    """Determine the next node based on the model's output.
-
-    This function checks if the model's last message contains tool calls.
-
-    Args:
-        state (State): The current state of the conversation.
-
-    Returns:
-        str: The name of the next node to call ("__end__" or "tools").
-    """
-    last_message = state.messages[-1]
-    if not isinstance(last_message, AIMessage):
-        raise ValueError(
-            f"Expected AIMessage in output edges, but got {type(last_message).__name__}"
+    agent = _build_agent(configuration)
+    if "query" not in state:
+        raise ValueError("Research query must be provided in the initial state.")
+    if state.get("plan"):
+        plan = [PlanItem(**step) if not isinstance(step, PlanItem) else step for step in state["plan"]]
+    else:
+        plan = await agent.plan_research(
+            query=state["query"],
+            max_branches=configuration.max_research_branches,
         )
-    # If there is no tool call, then we finish
-    if not last_message.tool_calls:
-        return "__end__"
-    # Otherwise we execute the requested actions
-    return "tools"
+    enriched_state = dict(state)
+    enriched_state.setdefault("current_step", 0)
+    enriched_state["plan"] = plan
+    return enriched_state
 
 
-# Add a conditional edge to determine the next step after `call_model`
-builder.add_conditional_edges(
-    "call_model",
-    # After call_model finishes running, the next node(s) are scheduled
-    # based on the output from route_model_output
-    route_model_output,
-)
+async def execute_research_step(state: ResearchState) -> ResearchState:
+    configuration = Configuration.from_context()
+    agent = _build_agent(configuration)
+    plan = state.get("plan", [])
+    index = state.get("current_step", 0)
+    if index >= len(plan):
+        return state
+    plan_item = plan[index]
+    if not isinstance(plan_item, PlanItem):
+        plan_item = PlanItem(**plan_item)
+    finding = await agent.gather_evidence(
+        query=state["query"],
+        step=plan_item,
+        search_tool=search,
+        max_results=configuration.max_search_results,
+    )
+    findings = list(state.get("findings", []))
+    findings.append(finding)
+    updated_state = dict(state)
+    updated_state["findings"] = findings
+    updated_state["current_step"] = index + 1
+    return updated_state
 
-# Add a normal edge from `tools` to `call_model`
-# This creates a cycle: after using tools, we always return to the model
-builder.add_edge("tools", "call_model")
 
-# Compile the builder into an executable graph
-#graph = builder.compile(name="ReAct Agent")
+async def synthesise_report(state: ResearchState) -> ResearchState:
+    configuration = Configuration.from_context()
+    agent = _build_agent(configuration)
+    plan = [PlanItem(**step) if not isinstance(step, PlanItem) else step for step in state.get("plan", [])]
+    findings = [Finding(**finding) if not isinstance(finding, Finding) else finding for finding in state.get("findings", [])]
+    report = await agent.synthesise(
+        query=state["query"],
+        plan=plan,
+        findings=findings,
+    )
+    enriched_state = dict(state)
+    enriched_state["report_markdown"] = report
+    return enriched_state
+
+
+async def export_docx(state: ResearchState) -> ResearchState:
+    if not state.get("report_markdown"):
+        return state
+    title = state.get("title") or f"Deep Research Report - {state['query']}"
+    docx_path = await markdown_to_docx(state["report_markdown"], title=title)
+    enriched_state = dict(state)
+    enriched_state["docx_path"] = docx_path
+    enriched_state["exported_at"] = datetime.now(tz=UTC).isoformat()
+    return enriched_state
+
+
+def route_after_plan(state: ResearchState) -> Literal["research", "__end__"]:
+    if state.get("plan"):
+        return "research"
+    return "__end__"
+
+
+def route_research(state: ResearchState) -> Literal["research", "synthesise"]:
+    plan = state.get("plan", [])
+    index = state.get("current_step", 0)
+    if index < len(plan):
+        return "research"
+    return "synthesise"
+
+
+def route_after_synthesis(state: ResearchState) -> Literal["export", "__end__"]:
+    if state.get("report_markdown"):
+        return "export"
+    return "__end__"
+
+
+builder = StateGraph(ResearchState, config_schema=Configuration)
+builder.add_node("plan", plan_research)
+builder.add_node("research", execute_research_step)
+builder.add_node("synthesise", synthesise_report)
+builder.add_node("export", export_docx)
+
+builder.add_edge(START, "plan")
+builder.add_conditional_edges("plan", route_after_plan, {"research": "research", "__end__": END})
+builder.add_conditional_edges("research", route_research, {"research": "research", "synthesise": "synthesise"})
+builder.add_conditional_edges("synthesise", route_after_synthesis, {"export": "export", "__end__": END})
+builder.add_edge("export", END)
+
+graph = builder.compile(name="deep_research_work_graph")
